@@ -4,6 +4,7 @@
 """
 
 import pandas as pd
+import re
 from typing import Dict, List, Tuple, Optional, Callable
 from utils import load_excel_file, save_excel_file, clean_dataframe, get_column_by_name, create_backup_file
 from openpyxl import load_workbook
@@ -138,8 +139,7 @@ class StockSyncProcessor:
         if not old_code or not new_code:
             return "物料编码不能为空"
 
-        old_code = old_code.strip()
-        new_code = new_code.strip()
+
 
         # 简单验证编码格式
         if not self._validate_material_code(old_code) or not self._validate_material_code(new_code):
@@ -174,8 +174,7 @@ class StockSyncProcessor:
                 errors.append(f"物料编码格式不正确: {old_code} -> {new_code}")
                 continue
             
-            old_code = old_code.strip()
-            new_code = new_code.strip()
+
 
             self.material_mapping[old_code] = new_code
         
@@ -203,7 +202,12 @@ class StockSyncProcessor:
             
             if os.path.exists(self.mapping_config_file):
                 with open(self.mapping_config_file, 'r', encoding='utf-8') as f:
-                    self.material_mapping = json.load(f)
+                    data = json.load(f)
+                    # 对键和值进行规范化，避免因空白字符导致匹配失败
+                    self.material_mapping = {
+                        self._normalize_material_code(k): self._normalize_material_code(v)
+                        for k, v in data.items()
+                    }
                     self._update_progress(f"已加载 {len(self.material_mapping)} 个物料编码映射")
         except Exception as e:
             # 如果加载失败，保持空映射
@@ -214,12 +218,18 @@ class StockSyncProcessor:
         """保存映射配置到JSON文件"""
         try:
             import json
-            
+
             with open(self.mapping_config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.material_mapping, f, ensure_ascii=False, indent=2)
         except Exception as e:
             self._update_progress(f"保存映射配置失败: {e}")
-    
+
+    def _normalize_material_code(self, code: str) -> str:
+        """规范化物料编码，去除空白字符"""
+        if code is None:
+            return ""
+        return re.sub(r"\s+", "", str(code)).strip()
+
     def _validate_material_code(self, code: str) -> bool:
         """验证物料编码格式"""
         if not code or not isinstance(code, str):
@@ -280,7 +290,7 @@ class StockSyncProcessor:
             if self.sales_df.iloc[idx].isna().all():
                 continue
                 
-            old_code = str(self.sales_df.at[idx, 'DZ']).strip()
+
             
             # 跳过空值和标题行
             if pd.isna(old_code) or old_code == 'nan' or old_code == '':
@@ -330,11 +340,11 @@ class StockSyncProcessor:
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
-                
+
             row_warehouse = self.sales_df.at[idx, 'GJ']
-            row_material = self.sales_df.at[idx, 'DZ']
+            row_material = self._normalize_material_code(self.sales_df.at[idx, 'DZ'])
             
-            if (pd.notna(row_warehouse) and row_warehouse == warehouse and 
+            if (pd.notna(row_warehouse) and row_warehouse == warehouse and
                 pd.notna(row_material) and row_material != ''):
                 material_codes.append(row_material)
         
@@ -346,6 +356,8 @@ class StockSyncProcessor:
     
     def _process_material_in_warehouse(self, material_code: str, warehouse: str):
         """处理仓库中的具体物料"""
+        material_code = self._normalize_material_code(material_code)
+
         # 从即时库存表中获取该物料在该仓库的库存信息（跳过标题行和空行）
         stock_rows = []
         
@@ -353,12 +365,12 @@ class StockSyncProcessor:
             # 跳过完全空行
             if self.stock_df.iloc[idx].isna().all():
                 continue
-                
-            row_material = self.stock_df.at[idx, 'A']
-            row_warehouse = self.stock_df.at[idx, 'G']
+
+            row_material = self._normalize_material_code(self.stock_df.at[idx, 'A'])
+            row_warehouse = str(self.stock_df.at[idx, 'G']).strip()
             
-            if (pd.notna(row_material) and str(row_material) == str(material_code) and
-                pd.notna(row_warehouse) and str(row_warehouse) == str(warehouse)):
+            if (pd.notna(row_material) and row_material == material_code and
+                pd.notna(row_warehouse) and row_warehouse == str(warehouse)):
                 stock_rows.append(idx)
         
         if not stock_rows:
@@ -372,12 +384,12 @@ class StockSyncProcessor:
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
-                
-            row_material = self.sales_df.at[idx, 'DZ']
-            row_warehouse = self.sales_df.at[idx, 'GJ']
+
+            row_material = self._normalize_material_code(self.sales_df.at[idx, 'DZ'])
+            row_warehouse = str(self.sales_df.at[idx, 'GJ']).strip()
             
-            if (pd.notna(row_material) and str(row_material) == str(material_code) and
-                pd.notna(row_warehouse) and str(row_warehouse) == str(warehouse)):
+            if (pd.notna(row_material) and row_material == material_code and
+                pd.notna(row_warehouse) and row_warehouse == str(warehouse)):
                 sales_rows.append(idx)
         
         if not sales_rows:
@@ -538,18 +550,20 @@ class StockSyncProcessor:
         """获取指定物料的仓库数量"""
         if self.stock_df is None:
             return 0
-        
-        warehouses = self.stock_df[self.stock_df['A'] == material_code]['G'].nunique()
+
+        code = self._normalize_material_code(material_code)
+        warehouses = self.stock_df[self.stock_df['A'].apply(self._normalize_material_code) == code]['G'].nunique()
         return warehouses
     
     def get_batch_info(self, material_code: str, warehouse: str) -> List[Dict]:
         """获取指定物料在指定仓库的批次信息"""
         if self.stock_df is None:
             return []
-        
+
+        code = self._normalize_material_code(material_code)
         batch_info = self.stock_df[
-            (self.stock_df['A'] == material_code) & 
-            (self.stock_df['G'] == warehouse)
+            (self.stock_df['A'].apply(self._normalize_material_code) == code) &
+            (self.stock_df['G'].astype(str).str.strip() == str(warehouse))
         ]
         
         result = []
@@ -563,5 +577,4 @@ class StockSyncProcessor:
                     'F': row['F']
                 }
             })
-        
-        return result 
+                return result 
