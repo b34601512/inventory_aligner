@@ -533,31 +533,13 @@ class StockSyncProcessor:
             ws.cell(row=row_idx + 1, column=openpyxl_col_idx).value = new_value
             # 高亮修改的单元格
             ws.cell(row=row_idx + 1, column=openpyxl_col_idx).fill = red_fill
-        
-        # 隐藏不需要的列（只保留重要的列可见）
-        self._hide_unnecessary_columns(ws)
-        
+                
         # 保存文件
         wb.save(self.sales_file_path)
         
         self._update_progress("文件保存完成")
     
-    def _hide_unnecessary_columns(self, ws):
-        """隐藏不需要的列，只保留重要的列可见"""
-        # 定义重要的列（需要显示的列）
-        important_columns = [
-            104,  # DZ列 - 物料编码
-            134,  # EF列 - 用户要求保留
-            136,  # FF列 - 批号
-            137,  # FG列 - 批号
-            270,  # GJ列 - 仓库名称
-            209   # HA列 - 销售数量
-        ]
-        
-        # 隐藏所有不重要的列
-        for col_idx in range(1, ws.max_column + 1):
-            if col_idx not in important_columns:
-                ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].hidden = True
+    
     
     def _get_column_index(self, column_index: int) -> int:
         """将0-based列索引转换为1-based列索引（openpyxl使用）"""
