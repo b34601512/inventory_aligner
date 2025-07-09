@@ -139,8 +139,7 @@ class StockSyncProcessor:
         if not old_code or not new_code:
             return "物料编码不能为空"
 
-        old_code = self._normalize_material_code(old_code)
-        new_code = self._normalize_material_code(new_code)
+
 
         # 简单验证编码格式
         if not self._validate_material_code(old_code) or not self._validate_material_code(new_code):
@@ -175,8 +174,7 @@ class StockSyncProcessor:
                 errors.append(f"物料编码格式不正确: {old_code} -> {new_code}")
                 continue
             
-            old_code = self._normalize_material_code(old_code)
-            new_code = self._normalize_material_code(new_code)
+
 
             self.material_mapping[old_code] = new_code
         
@@ -292,7 +290,7 @@ class StockSyncProcessor:
             if self.sales_df.iloc[idx].isna().all():
                 continue
                 
-            old_code = self._normalize_material_code(self.sales_df.at[idx, 'DZ'])
+
             
             # 跳过空值和标题行
             if pd.isna(old_code) or old_code == 'nan' or old_code == '':
