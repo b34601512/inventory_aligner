@@ -4,6 +4,7 @@
 """
 
 import pandas as pd
+import re
 from typing import Dict, List, Tuple, Optional, Callable
 from utils import load_excel_file, save_excel_file, clean_dataframe, get_column_by_name, create_backup_file
 from openpyxl import load_workbook
@@ -137,11 +138,14 @@ class StockSyncProcessor:
         """
         if not old_code or not new_code:
             return "物料编码不能为空"
-        
+
+        old_code = self._normalize_material_code(old_code)
+        new_code = self._normalize_material_code(new_code)
+
         # 简单验证编码格式
         if not self._validate_material_code(old_code) or not self._validate_material_code(new_code):
             return "物料编码格式不正确，应为 x.xx.x.xx.xx.xxx 格式"
-        
+
         self.material_mapping[old_code] = new_code
         # 保存映射配置到文件
         self._save_mapping_config()
@@ -171,6 +175,9 @@ class StockSyncProcessor:
                 errors.append(f"物料编码格式不正确: {old_code} -> {new_code}")
                 continue
             
+            old_code = self._normalize_material_code(old_code)
+            new_code = self._normalize_material_code(new_code)
+
             self.material_mapping[old_code] = new_code
         
         if errors:
@@ -197,7 +204,12 @@ class StockSyncProcessor:
             
             if os.path.exists(self.mapping_config_file):
                 with open(self.mapping_config_file, 'r', encoding='utf-8') as f:
-                    self.material_mapping = json.load(f)
+                    data = json.load(f)
+                    # 对键和值进行规范化，避免因空白字符导致匹配失败
+                    self.material_mapping = {
+                        self._normalize_material_code(k): self._normalize_material_code(v)
+                        for k, v in data.items()
+                    }
                     self._update_progress(f"已加载 {len(self.material_mapping)} 个物料编码映射")
         except Exception as e:
             # 如果加载失败，保持空映射
@@ -208,12 +220,18 @@ class StockSyncProcessor:
         """保存映射配置到JSON文件"""
         try:
             import json
-            
+
             with open(self.mapping_config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.material_mapping, f, ensure_ascii=False, indent=2)
         except Exception as e:
             self._update_progress(f"保存映射配置失败: {e}")
-    
+
+    def _normalize_material_code(self, code: str) -> str:
+        """规范化物料编码，去除空白字符"""
+        if code is None:
+            return ""
+        return re.sub(r"\s+", "", str(code)).strip()
+
     def _validate_material_code(self, code: str) -> bool:
         """验证物料编码格式"""
         if not code or not isinstance(code, str):
@@ -274,7 +292,7 @@ class StockSyncProcessor:
             if self.sales_df.iloc[idx].isna().all():
                 continue
                 
-            old_code = str(self.sales_df.at[idx, 'DZ'])
+            old_code = self._normalize_material_code(self.sales_df.at[idx, 'DZ'])
             
             # 跳过空值和标题行
             if pd.isna(old_code) or old_code == 'nan' or old_code == '':
@@ -324,11 +342,11 @@ class StockSyncProcessor:
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
-                
+
             row_warehouse = self.sales_df.at[idx, 'GJ']
-            row_material = self.sales_df.at[idx, 'DZ']
+            row_material = self._normalize_material_code(self.sales_df.at[idx, 'DZ'])
             
-            if (pd.notna(row_warehouse) and row_warehouse == warehouse and 
+            if (pd.notna(row_warehouse) and row_warehouse == warehouse and
                 pd.notna(row_material) and row_material != ''):
                 material_codes.append(row_material)
         
@@ -340,6 +358,8 @@ class StockSyncProcessor:
     
     def _process_material_in_warehouse(self, material_code: str, warehouse: str):
         """处理仓库中的具体物料"""
+        material_code = self._normalize_material_code(material_code)
+
         # 从即时库存表中获取该物料在该仓库的库存信息（跳过标题行和空行）
         stock_rows = []
         
@@ -347,12 +367,12 @@ class StockSyncProcessor:
             # 跳过完全空行
             if self.stock_df.iloc[idx].isna().all():
                 continue
-                
-            row_material = self.stock_df.at[idx, 'A']
-            row_warehouse = self.stock_df.at[idx, 'G']
+
+            row_material = self._normalize_material_code(self.stock_df.at[idx, 'A'])
+            row_warehouse = str(self.stock_df.at[idx, 'G']).strip()
             
-            if (pd.notna(row_material) and str(row_material) == str(material_code) and
-                pd.notna(row_warehouse) and str(row_warehouse) == str(warehouse)):
+            if (pd.notna(row_material) and row_material == material_code and
+                pd.notna(row_warehouse) and row_warehouse == str(warehouse)):
                 stock_rows.append(idx)
         
         if not stock_rows:
@@ -366,12 +386,12 @@ class StockSyncProcessor:
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
-                
-            row_material = self.sales_df.at[idx, 'DZ']
-            row_warehouse = self.sales_df.at[idx, 'GJ']
+
+            row_material = self._normalize_material_code(self.sales_df.at[idx, 'DZ'])
+            row_warehouse = str(self.sales_df.at[idx, 'GJ']).strip()
             
-            if (pd.notna(row_material) and str(row_material) == str(material_code) and
-                pd.notna(row_warehouse) and str(row_warehouse) == str(warehouse)):
+            if (pd.notna(row_material) and row_material == material_code and
+                pd.notna(row_warehouse) and row_warehouse == str(warehouse)):
                 sales_rows.append(idx)
         
         if not sales_rows:
@@ -386,16 +406,8 @@ class StockSyncProcessor:
     def _allocate_batch_numbers(self, sales_row_indices: list, stock_row_indices: list, 
                                material_code: str, warehouse: str):
         """分配批次号"""
-        # 计算总销售数量
-        total_sales_qty = 0
-        for idx in sales_row_indices:
-            qty = self.sales_df.at[idx, 'HA']
-            if pd.notna(qty):
-                try:
-                    total_sales_qty += float(qty)
-                except:
-                    pass
-        
+        # 按行数计算需要分配的数量
+        total_sales_qty = len(sales_row_indices)
         if total_sales_qty <= 0:
             return
         
@@ -429,9 +441,9 @@ class StockSyncProcessor:
             if allocated_qty >= total_sales_qty:
                 break
                 
-            batch_stock = info['quantity']
-            
-            # 计算本批次可分配的数量
+            batch_stock = int(info['quantity'])
+
+            # 计算本批次可分配的行数
             remaining_qty = total_sales_qty - allocated_qty
             allocated_batch_qty = min(batch_stock, remaining_qty)
             
@@ -453,43 +465,34 @@ class StockSyncProcessor:
         
         for allocation in batch_allocation:
             batch_num = allocation['batch_num']
-            quantity = allocation['quantity']
+            quantity = int(allocation['quantity'])
             auxiliary_attrs = allocation['auxiliary_attrs']
-            
-            # 计算需要分配给当前批次的行数
-            # 这里我们按照销售数量来分配，而不是简单的按行数
-            remaining_qty = quantity
-            
-            while remaining_qty > 0 and row_idx < len(sales_row_indices):
+
+            rows_to_allocate = quantity
+
+            while rows_to_allocate > 0 and row_idx < len(sales_row_indices):
                 actual_idx = sales_row_indices[row_idx]
-                
-                # 获取当前行的销售数量
-                row_qty = self.sales_df.at[actual_idx, 'HA']
-                try:
-                    row_qty = float(row_qty) if pd.notna(row_qty) else 1
-                except:
-                    row_qty = 1
-                
+
                 # 更新批次号
                 self.sales_df.at[actual_idx, 'FF'] = batch_num
                 self.sales_df.at[actual_idx, 'FG'] = batch_num
-                
+
                 # 同时更新原始列
                 ff_col_idx = 161  # FF列的实际位置
                 fg_col_idx = 162  # FG列的实际位置
-                
+
                 if ff_col_idx < len(self.sales_df.columns):
                     self.sales_df.iloc[actual_idx, ff_col_idx] = batch_num
                 if fg_col_idx < len(self.sales_df.columns):
                     self.sales_df.iloc[actual_idx, fg_col_idx] = batch_num
-                
+
                 # 记录修改的单元格
                 self.modified_cells.extend([
                     (actual_idx, ff_col_idx),
                     (actual_idx, fg_col_idx)
                 ])
-                
-                remaining_qty -= row_qty
+
+                rows_to_allocate -= 1
                 row_idx += 1
     
     def _update_auxiliary_attributes(self, sales_row_indices: list, stock_row_indices: list,
@@ -549,18 +552,20 @@ class StockSyncProcessor:
         """获取指定物料的仓库数量"""
         if self.stock_df is None:
             return 0
-        
-        warehouses = self.stock_df[self.stock_df['A'] == material_code]['G'].nunique()
+
+        code = self._normalize_material_code(material_code)
+        warehouses = self.stock_df[self.stock_df['A'].apply(self._normalize_material_code) == code]['G'].nunique()
         return warehouses
     
     def get_batch_info(self, material_code: str, warehouse: str) -> List[Dict]:
         """获取指定物料在指定仓库的批次信息"""
         if self.stock_df is None:
             return []
-        
+
+        code = self._normalize_material_code(material_code)
         batch_info = self.stock_df[
-            (self.stock_df['A'] == material_code) & 
-            (self.stock_df['G'] == warehouse)
+            (self.stock_df['A'].apply(self._normalize_material_code) == code) &
+            (self.stock_df['G'].astype(str).str.strip() == str(warehouse))
         ]
         
         result = []
@@ -574,5 +579,4 @@ class StockSyncProcessor:
                     'F': row['F']
                 }
             })
-        
-        return result 
+                return result 
