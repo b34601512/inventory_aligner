@@ -19,6 +19,10 @@ class StockSyncProcessor:
         self.stock_df = None
         self.material_mapping = {}  # 物料编码映射 {旧料号: 新料号}
         self.modified_cells = []  # 记录修改的单元格位置
+        self.mapping_config_file = 'material_mapping.json'
+        
+        # 自动加载保存的映射配置
+        self._load_mapping_config()
         
     def set_progress_callback(self, callback: Callable):
         """设置进度回调函数"""
@@ -139,7 +143,76 @@ class StockSyncProcessor:
             return "物料编码格式不正确，应为 x.xx.x.xx.xx.xxx 格式"
         
         self.material_mapping[old_code] = new_code
+        # 保存映射配置到文件
+        self._save_mapping_config()
         return ""
+    
+    def set_material_mappings(self, mappings: List[tuple]) -> str:
+        """
+        批量设置物料编码映射
+        
+        Args:
+            mappings: 映射列表，每个元素为 (old_code, new_code) 元组
+            
+        Returns:
+            错误信息，空字符串表示成功
+        """
+        if not mappings:
+            return "映射列表不能为空"
+        
+        errors = []
+        for old_code, new_code in mappings:
+            if not old_code or not new_code:
+                errors.append(f"物料编码不能为空: {old_code} -> {new_code}")
+                continue
+                
+            # 简单验证编码格式
+            if not self._validate_material_code(old_code) or not self._validate_material_code(new_code):
+                errors.append(f"物料编码格式不正确: {old_code} -> {new_code}")
+                continue
+            
+            self.material_mapping[old_code] = new_code
+        
+        if errors:
+            return "; ".join(errors)
+        
+        # 保存映射配置到文件
+        self._save_mapping_config()
+        return ""
+    
+    def clear_material_mappings(self):
+        """清空所有物料编码映射"""
+        self.material_mapping = {}
+        self._save_mapping_config()
+    
+    def get_material_mappings(self) -> dict:
+        """获取当前的物料编码映射"""
+        return self.material_mapping.copy()
+    
+    def _load_mapping_config(self):
+        """从JSON文件加载映射配置"""
+        try:
+            import json
+            import os
+            
+            if os.path.exists(self.mapping_config_file):
+                with open(self.mapping_config_file, 'r', encoding='utf-8') as f:
+                    self.material_mapping = json.load(f)
+                    self._update_progress(f"已加载 {len(self.material_mapping)} 个物料编码映射")
+        except Exception as e:
+            # 如果加载失败，保持空映射
+            self.material_mapping = {}
+            self._update_progress(f"加载映射配置失败: {e}")
+    
+    def _save_mapping_config(self):
+        """保存映射配置到JSON文件"""
+        try:
+            import json
+            
+            with open(self.mapping_config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.material_mapping, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self._update_progress(f"保存映射配置失败: {e}")
     
     def _validate_material_code(self, code: str) -> bool:
         """验证物料编码格式"""
@@ -172,10 +245,6 @@ class StockSyncProcessor:
             
             if not self.material_mapping:
                 return "请先设置物料编码映射"
-            
-            # 创建备份文件
-            self._update_progress("正在创建备份文件...")
-            backup_path = create_backup_file(self.sales_file_path)
             
             # 开始处理
             self._update_progress("开始处理数据同步...")
@@ -446,32 +515,49 @@ class StockSyncProcessor:
         """保存文件并高亮修改内容"""
         self._update_progress("正在保存文件...")
         
-        # 先保存DataFrame
-        temp_path = self.sales_file_path.replace('.xlsx', '_temp.xlsx')
-        self.sales_df.to_excel(temp_path, index=False)
-        
-        # 使用openpyxl重新打开文件进行格式化
-        wb = load_workbook(temp_path)
+        # 直接使用openpyxl打开原始文件
+        wb = load_workbook(self.sales_file_path)
         ws = wb.active
         
         # 设置红色填充样式
         red_fill = PatternFill(start_color="FFFF0000", end_color="FFFF0000", fill_type="solid")
         
-        # 高亮修改的单元格
+        # 应用所有修改并高亮修改的单元格
         for row_idx, col_idx in self.modified_cells:
             # 转换列索引到openpyxl格式（1-based）
             openpyxl_col_idx = self._get_column_index(col_idx)
-            # 注意：openpyxl的行索引从1开始，且我们需要考虑DataFrame的索引
+            # 获取修改后的值
+            new_value = self.sales_df.iloc[row_idx, col_idx]
+            
+            # 更新单元格值
+            ws.cell(row=row_idx + 1, column=openpyxl_col_idx).value = new_value
+            # 高亮修改的单元格
             ws.cell(row=row_idx + 1, column=openpyxl_col_idx).fill = red_fill
+        
+        # 隐藏不需要的列（只保留重要的列可见）
+        self._hide_unnecessary_columns(ws)
         
         # 保存文件
         wb.save(self.sales_file_path)
         
-        # 删除临时文件
-        import os
-        os.remove(temp_path)
-        
         self._update_progress("文件保存完成")
+    
+    def _hide_unnecessary_columns(self, ws):
+        """隐藏不需要的列，只保留重要的列可见"""
+        # 定义重要的列（需要显示的列）
+        important_columns = [
+            104,  # DZ列 - 物料编码
+            134,  # EF列 - 用户要求保留
+            136,  # FF列 - 批号
+            137,  # FG列 - 批号
+            270,  # GJ列 - 仓库名称
+            209   # HA列 - 销售数量
+        ]
+        
+        # 隐藏所有不重要的列
+        for col_idx in range(1, ws.max_column + 1):
+            if col_idx not in important_columns:
+                ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].hidden = True
     
     def _get_column_index(self, column_index: int) -> int:
         """将0-based列索引转换为1-based列索引（openpyxl使用）"""

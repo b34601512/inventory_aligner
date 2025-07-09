@@ -8,7 +8,7 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTextEdit, QFileDialog, QGroupBox, QProgressBar,
-                             QGridLayout, QMessageBox, QFrame, QSplitter)
+                             QGridLayout, QMessageBox, QFrame, QSplitter, QTabWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor
 from logic import StockSyncProcessor
@@ -50,6 +50,8 @@ class StockSyncMainWindow(QMainWindow):
         self.processing_thread = None
         self.init_ui()
         self.setup_styles()
+        # 在UI初始化完成后更新映射显示
+        self.update_mapping_display()
         
     def init_ui(self):
         """初始化用户界面"""
@@ -88,30 +90,71 @@ class StockSyncMainWindow(QMainWindow):
         
         # 物料编码映射区域
         mapping_group = QGroupBox("物料编码映射")
-        mapping_layout = QGridLayout(mapping_group)
+        mapping_layout = QVBoxLayout(mapping_group)
+        
+        # 创建选项卡
+        mapping_tabs = QTabWidget()
+        
+        # 单个映射选项卡
+        single_tab = QWidget()
+        single_layout = QGridLayout(single_tab)
         
         # 旧料号输入
-        mapping_layout.addWidget(QLabel("旧料号:"), 0, 0)
+        single_layout.addWidget(QLabel("旧料号:"), 0, 0)
         self.old_material_code = QLineEdit()
         self.old_material_code.setPlaceholderText("例如: 8.01.1.01.01.206")
-        mapping_layout.addWidget(self.old_material_code, 0, 1)
+        single_layout.addWidget(self.old_material_code, 0, 1)
         
         # 新料号输入
-        mapping_layout.addWidget(QLabel("新料号:"), 1, 0)
+        single_layout.addWidget(QLabel("新料号:"), 1, 0)
         self.new_material_code = QLineEdit()
         self.new_material_code.setPlaceholderText("例如: 8.01.1.01.01.233")
-        mapping_layout.addWidget(self.new_material_code, 1, 1)
+        single_layout.addWidget(self.new_material_code, 1, 1)
         
         # 添加映射按钮
         add_mapping_btn = QPushButton("添加映射")
         add_mapping_btn.clicked.connect(self.add_material_mapping)
-        mapping_layout.addWidget(add_mapping_btn, 2, 0, 1, 2)
+        single_layout.addWidget(add_mapping_btn, 2, 0, 1, 2)
+        
+        mapping_tabs.addTab(single_tab, "单个映射")
+        
+        # 批量映射选项卡
+        batch_tab = QWidget()
+        batch_layout = QVBoxLayout(batch_tab)
+        
+        batch_layout.addWidget(QLabel("批量映射 (每行一个映射，格式: 旧料号,新料号):"))
+        self.batch_mapping_input = QTextEdit()
+        self.batch_mapping_input.setMaximumHeight(100)
+        self.batch_mapping_input.setPlaceholderText("例如:\n8.01.1.01.01.206,8.01.1.01.01.233\n8.01.2.01.01.301,8.01.2.01.01.401")
+        batch_layout.addWidget(self.batch_mapping_input)
+        
+        # 批量添加按钮
+        batch_add_btn = QPushButton("批量添加")
+        batch_add_btn.clicked.connect(self.add_batch_mappings)
+        batch_layout.addWidget(batch_add_btn)
+        
+        mapping_tabs.addTab(batch_tab, "批量映射")
+        
+        mapping_layout.addWidget(mapping_tabs)
+        
+        # 操作按钮行
+        button_layout = QHBoxLayout()
+        
+        # 清空映射按钮
+        clear_mapping_btn = QPushButton("清空映射")
+        clear_mapping_btn.clicked.connect(self.clear_mappings)
+        button_layout.addWidget(clear_mapping_btn)
+        
+        # 添加弹性空间
+        button_layout.addStretch()
+        
+        mapping_layout.addLayout(button_layout)
         
         # 映射列表显示
         self.mapping_display = QTextEdit()
         self.mapping_display.setMaximumHeight(100)
         self.mapping_display.setReadOnly(True)
-        mapping_layout.addWidget(self.mapping_display, 3, 0, 1, 2)
+        mapping_layout.addWidget(self.mapping_display)
         
         left_layout.addWidget(mapping_group)
         
@@ -290,6 +333,63 @@ class StockSyncMainWindow(QMainWindow):
         
         # 添加日志
         self.add_log(f"添加物料编码映射: {old_code} -> {new_code}")
+    
+    def add_batch_mappings(self):
+        """批量添加物料编码映射"""
+        text = self.batch_mapping_input.toPlainText().strip()
+        if not text:
+            show_message(self, "错误", "请输入批量映射数据", "warning")
+            return
+        
+        mappings = []
+        lines = text.split('\n')
+        
+        for line_num, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line:
+                continue
+                
+            if ',' not in line:
+                show_message(self, "错误", f"第{line_num}行格式错误，应为：旧料号,新料号", "warning")
+                return
+            
+            parts = line.split(',')
+            if len(parts) != 2:
+                show_message(self, "错误", f"第{line_num}行格式错误，应为：旧料号,新料号", "warning")
+                return
+            
+            old_code = parts[0].strip()
+            new_code = parts[1].strip()
+            
+            if not old_code or not new_code:
+                show_message(self, "错误", f"第{line_num}行物料编码不能为空", "warning")
+                return
+            
+            mappings.append((old_code, new_code))
+        
+        if not mappings:
+            show_message(self, "错误", "没有找到有效的映射数据", "warning")
+            return
+        
+        # 批量设置映射
+        error = self.processor.set_material_mappings(mappings)
+        if error:
+            show_message(self, "错误", f"批量映射设置失败: {error}", "error")
+        else:
+            show_message(self, "成功", f"成功添加 {len(mappings)} 个映射", "info")
+            self.batch_mapping_input.clear()
+            self.update_mapping_display()
+            self.add_log(f"批量添加 {len(mappings)} 个物料编码映射")
+    
+    def clear_mappings(self):
+        """清空所有映射"""
+        reply = QMessageBox.question(self, "确认", "确定要清空所有物料编码映射吗？", 
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.processor.clear_material_mappings()
+            self.update_mapping_display()
+            show_message(self, "信息", "已清空所有映射", "info")
+            self.add_log("已清空所有物料编码映射")
         
     def update_mapping_display(self):
         """更新映射显示"""
@@ -297,7 +397,10 @@ class StockSyncMainWindow(QMainWindow):
         for old_code, new_code in self.processor.material_mapping.items():
             mappings.append(f"{old_code} -> {new_code}")
         
-        self.mapping_display.setPlainText("\n".join(mappings))
+        if mappings:
+            self.mapping_display.setPlainText("\n".join(mappings))
+        else:
+            self.mapping_display.setPlainText("暂无映射配置")
         
     def browse_sales_file(self):
         """浏览销售出库单文件"""
@@ -409,9 +512,13 @@ class StockSyncMainWindow(QMainWindow):
             # 清空所有输入
             self.old_material_code.clear()
             self.new_material_code.clear()
+            self.batch_mapping_input.clear()
             self.sales_file_path.clear()
             self.stock_file_path.clear()
-            self.mapping_display.clear()
+            
+            # 清空映射配置
+            self.processor.clear_material_mappings()
+            self.update_mapping_display()
             
             # 重置处理器
             self.processor = StockSyncProcessor()
