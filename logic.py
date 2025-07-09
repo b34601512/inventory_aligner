@@ -137,11 +137,14 @@ class StockSyncProcessor:
         """
         if not old_code or not new_code:
             return "物料编码不能为空"
-        
+
+        old_code = old_code.strip()
+        new_code = new_code.strip()
+
         # 简单验证编码格式
         if not self._validate_material_code(old_code) or not self._validate_material_code(new_code):
             return "物料编码格式不正确，应为 x.xx.x.xx.xx.xxx 格式"
-        
+
         self.material_mapping[old_code] = new_code
         # 保存映射配置到文件
         self._save_mapping_config()
@@ -171,6 +174,9 @@ class StockSyncProcessor:
                 errors.append(f"物料编码格式不正确: {old_code} -> {new_code}")
                 continue
             
+            old_code = old_code.strip()
+            new_code = new_code.strip()
+
             self.material_mapping[old_code] = new_code
         
         if errors:
@@ -274,7 +280,7 @@ class StockSyncProcessor:
             if self.sales_df.iloc[idx].isna().all():
                 continue
                 
-            old_code = str(self.sales_df.at[idx, 'DZ'])
+            old_code = str(self.sales_df.at[idx, 'DZ']).strip()
             
             # 跳过空值和标题行
             if pd.isna(old_code) or old_code == 'nan' or old_code == '':
@@ -386,16 +392,8 @@ class StockSyncProcessor:
     def _allocate_batch_numbers(self, sales_row_indices: list, stock_row_indices: list, 
                                material_code: str, warehouse: str):
         """分配批次号"""
-        # 计算总销售数量
-        total_sales_qty = 0
-        for idx in sales_row_indices:
-            qty = self.sales_df.at[idx, 'HA']
-            if pd.notna(qty):
-                try:
-                    total_sales_qty += float(qty)
-                except:
-                    pass
-        
+        # 按行数计算需要分配的数量
+        total_sales_qty = len(sales_row_indices)
         if total_sales_qty <= 0:
             return
         
@@ -429,9 +427,9 @@ class StockSyncProcessor:
             if allocated_qty >= total_sales_qty:
                 break
                 
-            batch_stock = info['quantity']
-            
-            # 计算本批次可分配的数量
+            batch_stock = int(info['quantity'])
+
+            # 计算本批次可分配的行数
             remaining_qty = total_sales_qty - allocated_qty
             allocated_batch_qty = min(batch_stock, remaining_qty)
             
@@ -453,43 +451,34 @@ class StockSyncProcessor:
         
         for allocation in batch_allocation:
             batch_num = allocation['batch_num']
-            quantity = allocation['quantity']
+            quantity = int(allocation['quantity'])
             auxiliary_attrs = allocation['auxiliary_attrs']
-            
-            # 计算需要分配给当前批次的行数
-            # 这里我们按照销售数量来分配，而不是简单的按行数
-            remaining_qty = quantity
-            
-            while remaining_qty > 0 and row_idx < len(sales_row_indices):
+
+            rows_to_allocate = quantity
+
+            while rows_to_allocate > 0 and row_idx < len(sales_row_indices):
                 actual_idx = sales_row_indices[row_idx]
-                
-                # 获取当前行的销售数量
-                row_qty = self.sales_df.at[actual_idx, 'HA']
-                try:
-                    row_qty = float(row_qty) if pd.notna(row_qty) else 1
-                except:
-                    row_qty = 1
-                
+
                 # 更新批次号
                 self.sales_df.at[actual_idx, 'FF'] = batch_num
                 self.sales_df.at[actual_idx, 'FG'] = batch_num
-                
+
                 # 同时更新原始列
                 ff_col_idx = 161  # FF列的实际位置
                 fg_col_idx = 162  # FG列的实际位置
-                
+
                 if ff_col_idx < len(self.sales_df.columns):
                     self.sales_df.iloc[actual_idx, ff_col_idx] = batch_num
                 if fg_col_idx < len(self.sales_df.columns):
                     self.sales_df.iloc[actual_idx, fg_col_idx] = batch_num
-                
+
                 # 记录修改的单元格
                 self.modified_cells.extend([
                     (actual_idx, ff_col_idx),
                     (actual_idx, fg_col_idx)
                 ])
-                
-                remaining_qty -= row_qty
+
+                rows_to_allocate -= 1
                 row_idx += 1
     
     def _update_auxiliary_attributes(self, sales_row_indices: list, stock_row_indices: list,
