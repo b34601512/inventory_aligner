@@ -56,11 +56,11 @@ class StockSyncProcessor:
             
             # 验证必要的列是否存在（按列位置检查）
             required_columns = {
-                'DZ': 103,  # 第104列 (0-based index)
-                'FF': 135,  # 第136列
-                'FG': 136,  # 第137列  
-                'GJ': 269,  # 第270列
-                'HA': 208   # 第209列
+                'DZ': 129,  # 第130列 - 物料编码
+                'FF': 161,  # 第162列 - 批号#主档
+                'FG': 162,  # 第163列 - 批号#手工
+                'GJ': 191,  # 第192列 - 仓库名称
+                'HA': 208   # 第209列 - 销售数量
             }
             
             max_col_needed = max(required_columns.values())
@@ -285,7 +285,7 @@ class StockSyncProcessor:
                 self.sales_df.at[idx, 'DZ'] = new_code
                 
                 # 同时更新原始列
-                original_col_idx = 103  # DZ列的实际位置
+                original_col_idx = 129  # DZ列的实际位置
                 if original_col_idx < len(self.sales_df.columns):
                     self.sales_df.iloc[idx, original_col_idx] = new_code
                 
@@ -475,8 +475,8 @@ class StockSyncProcessor:
                 self.sales_df.at[actual_idx, 'FG'] = batch_num
                 
                 # 同时更新原始列
-                ff_col_idx = 135  # FF列的实际位置
-                fg_col_idx = 136  # FG列的实际位置
+                ff_col_idx = 161  # FF列的实际位置
+                fg_col_idx = 162  # FG列的实际位置
                 
                 if ff_col_idx < len(self.sales_df.columns):
                     self.sales_df.iloc[actual_idx, ff_col_idx] = batch_num
