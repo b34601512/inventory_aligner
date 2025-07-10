@@ -285,13 +285,30 @@ class StockSyncProcessor:
     def _replace_material_codes(self):
         """根据映射表批量替换物料编码"""
         self._update_progress("正在替换物料编码...")
+
+        for old_code, new_code in self.material_mapping.items():
+            old_norm = self._normalize_material_code(old_code)
+            new_norm = self._normalize_material_code(new_code)
+
+            if not old_norm or old_norm == new_norm:
                 continue
-            self.sales_df.loc[indices, 'DZ'] = new_code
+
+            indices = self.sales_df[
+                self.sales_df['DZ'].apply(self._normalize_material_code) == old_norm
+            ].index
+
+            if len(indices) == 0:
+                continue
+
+            self.sales_df.loc[indices, 'DZ'] = new_norm
             col_idx = 129  # DZ 列实际位置
+
             if col_idx < len(self.sales_df.columns):
-                self.sales_df.iloc[indices, col_idx] = new_code
+                self.sales_df.iloc[indices, col_idx] = new_norm
+
             for i in indices:
                 self.modified_cells.append((i, col_idx))
+
             self._update_progress(f"已替换物料编码: {old_code} -> {new_code}")
 
     def _synchronize_by_flow(self):
@@ -303,80 +320,49 @@ class StockSyncProcessor:
         n = 1
 
         for old_code, new_code in mappings:
-
             self._update_progress(
                 f"处理料号 {n}/{total}: {old_code} -> {new_code}")
 
-            # 步骤2：获取涉及的仓库
-            warehouses = self.sales_df[self.sales_df['DZ'] == new_code]['GJ'].dropna().unique()
+            sales_with_new = self.sales_df[self.sales_df['DZ'] == new_code]
+            warehouses = sales_with_new['GJ'].dropna().unique()
 
             for warehouse in warehouses:
-                # 步骤2：筛选该仓库的销售记录
                 sales_rows = self.sales_df[(self.sales_df['DZ'] == new_code) &
                                            (self.sales_df['GJ'] == warehouse)]
                 if sales_rows.empty:
                     continue
 
-                # 步骤3：在库存表中筛选相同仓库
-                stock_rows = self.stock_df[self.stock_df['G'] == warehouse]
+                stock_rows = self.stock_df[(self.stock_df['A'] == new_code) &
+                                            (self.stock_df['G'] == warehouse)]
 
-                # 步骤5：筛选库存表中物料编码等于新料号的记录
-                stock_subset = stock_rows[stock_rows['A'] == new_code]
-
-            self._update_progress(f"处理料号 {n}/{total}: {old_code} -> {new_code}")
-
-            # 步骤2：获取该料号涉及的所有仓库
-            sales_with_new = self.sales_df[self.sales_df['DZ'] == new_code]
-            warehouses = sales_with_new['GJ'].dropna().unique()
-
-            for warehouse in warehouses:
-                # 步骤2：筛选销售出库单中该仓库的所有记录
-                sales_warehouse = self.sales_df[self.sales_df['GJ'] == warehouse]
-
-                # 步骤3：在即时库存表中筛选相同仓库
-                stock_warehouse = self.stock_df[self.stock_df['G'] == warehouse]
-
-                # 步骤4：筛选物料编码等于新料号的销售记录
-                sales_idx = sales_warehouse[sales_warehouse['DZ'] == new_code].index
-                if len(sales_idx) == 0:
-                    continue
-
-                # 步骤5：筛选物料编码等于新料号的库存记录
-                stock_subset = stock_warehouse[stock_warehouse['A'] == new_code]
-
-                if stock_subset.empty:
+                if stock_rows.empty:
                     self._update_progress(
                         f"警告: 库存表中没有找到仓库 {warehouse} 的料号 {new_code}")
                     continue
 
-                # 步骤6：按可用库存降序排序，取最大值行
-                stock_row = stock_subset.sort_values(by='K', ascending=False).iloc[0]
+                stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
                 batch = stock_row['H']
                 aux_e = stock_row['E']
                 aux_f = stock_row['F']
 
+                indices = sales_rows.index
 
-                sales_idx = sales_rows.index
-
-
-
-                # 步骤7-10：更新销售出库单相应字段
-                self.sales_df.loc[sales_idx, 'FF'] = batch
-                self.sales_df.loc[sales_idx, 'FG'] = batch
-                self.sales_df.loc[sales_idx, 'EC'] = aux_e
-                self.sales_df.loc[sales_idx, 'ED'] = aux_f
+                self.sales_df.loc[indices, 'FF'] = batch
+                self.sales_df.loc[indices, 'FG'] = batch
+                self.sales_df.loc[indices, 'EC'] = aux_e
+                self.sales_df.loc[indices, 'ED'] = aux_f
 
                 ff_idx, fg_idx, ec_idx, ed_idx = 161, 162, 132, 133
                 if ff_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[sales_idx, ff_idx] = batch
+                    self.sales_df.iloc[indices, ff_idx] = batch
                 if fg_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[sales_idx, fg_idx] = batch
+                    self.sales_df.iloc[indices, fg_idx] = batch
                 if ec_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[sales_idx, ec_idx] = aux_e
+                    self.sales_df.iloc[indices, ec_idx] = aux_e
                 if ed_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[sales_idx, ed_idx] = aux_f
+                    self.sales_df.iloc[indices, ed_idx] = aux_f
 
-                for idx in sales_idx:
+                for idx in indices:
                     self.modified_cells.extend([
                         (idx, ff_idx),
                         (idx, fg_idx),
