@@ -295,7 +295,7 @@ class StockSyncProcessor:
 
             indices = self.sales_df[
                 (self.sales_df['DZ'].apply(self._normalize_material_code) == old_norm)
-                & (self.sales_df.index >= 2)
+                & (self.sales_df.index >= 1)
             ].index
 
             if len(indices) == 0:
@@ -323,7 +323,7 @@ class StockSyncProcessor:
 
         # 收集销售出库单中出现的仓库顺序列表（跳过前两行）
         warehouse_list = []
-        for w in self.sales_df['GJ'].iloc[2:]:
+        for w in self.sales_df['GJ'].iloc[1:]:
             if pd.notna(w) and w not in warehouse_list:
                 warehouse_list.append(w)
 
@@ -339,21 +339,22 @@ class StockSyncProcessor:
                 f"处理料号 {n}/{total}: {old_code} -> {new_code}")
 
             for warehouse in warehouse_list:
-                sales_rows = self.sales_df[(self.sales_df.index >= 2) &
-                                           (self.sales_df['DZ'] == new_norm) &
-                                           (self.sales_df['GJ'] == warehouse)]
+                sales_rows = self.sales_df[(self.sales_df.index >= 1) &
+                                           (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
+                                           (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())]
                 if sales_rows.empty:
                     continue
 
-                stock_rows = self.stock_df[(self.stock_df.index >= 1) &
-                                            (self.stock_df['A'] == new_norm) &
-                                            (self.stock_df['G'] == warehouse)]
+                stock_rows = self.stock_df[(self.stock_df.index >= 0) &
+                                            (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
+                                            (self.stock_df['G'].astype(str).str.strip() == str(warehouse).strip())]
 
                 if stock_rows.empty:
                     self._update_progress(
                         f"警告: 库存表中没有找到仓库 {warehouse} 的料号 {new_code}")
                     continue
 
+                stock_rows['K'] = pd.to_numeric(stock_rows['K'], errors='coerce')
                 stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
                 batch = stock_row['H']
                 aux_e = stock_row['E']
@@ -392,7 +393,7 @@ class StockSyncProcessor:
         
         # 获取所有仓库列表（跳过标题行和空行）
         warehouse_data = []
-        for idx in range(2, len(self.sales_df)):
+        for idx in range(1, len(self.sales_df)):
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
@@ -412,7 +413,7 @@ class StockSyncProcessor:
         # 获取该仓库的所有新料号（跳过标题行和空行）
         material_codes = []
         
-        for idx in range(2, len(self.sales_df)):
+        for idx in range(1, len(self.sales_df)):
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
@@ -457,7 +458,7 @@ class StockSyncProcessor:
         # 获取销售出库单中对应的行（跳过标题行和空行）
         sales_rows = []
         
-        for idx in range(2, len(self.sales_df)):  # 销售出库单从第3行开始
+        for idx in range(1, len(self.sales_df)):  # 销售出库单从第2行开始
             # 跳过完全空行
             if self.sales_df.iloc[idx].isna().all():
                 continue
@@ -595,6 +596,7 @@ class StockSyncProcessor:
         self._update_progress("正在保存文件...")
         
         # 直接使用openpyxl打开原始文件
+        backup_path = create_backup_file(self.sales_file_path)
         wb = load_workbook(self.sales_file_path)
         ws = wb.active
         
@@ -609,9 +611,9 @@ class StockSyncProcessor:
             new_value = self.sales_df.iloc[row_idx, col_idx]
             
             # 更新单元格值
-            ws.cell(row=row_idx + 1, column=openpyxl_col_idx).value = new_value
+            ws.cell(row=row_idx + 2, column=openpyxl_col_idx).value = new_value
             # 高亮修改的单元格
-            ws.cell(row=row_idx + 1, column=openpyxl_col_idx).fill = red_fill
+            ws.cell(row=row_idx + 2, column=openpyxl_col_idx).fill = red_fill
                 
         # 保存文件
         wb.save(self.sales_file_path)
