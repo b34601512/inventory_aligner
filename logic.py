@@ -285,11 +285,6 @@ class StockSyncProcessor:
     def _replace_material_codes(self):
         """根据映射表批量替换物料编码"""
         self._update_progress("正在替换物料编码...")
-
-        for old_code, new_code in self.material_mapping.items():
-            mask = self.sales_df['DZ'].apply(self._normalize_material_code) == self._normalize_material_code(old_code)
-            indices = self.sales_df[mask].index
-            if len(indices) == 0:
                 continue
             self.sales_df.loc[indices, 'DZ'] = new_code
             col_idx = 129  # DZ 列实际位置
@@ -308,6 +303,7 @@ class StockSyncProcessor:
         n = 1
 
         for old_code, new_code in mappings:
+
             self._update_progress(
                 f"处理料号 {n}/{total}: {old_code} -> {new_code}")
 
@@ -326,6 +322,28 @@ class StockSyncProcessor:
 
                 # 步骤5：筛选库存表中物料编码等于新料号的记录
                 stock_subset = stock_rows[stock_rows['A'] == new_code]
+
+            self._update_progress(f"处理料号 {n}/{total}: {old_code} -> {new_code}")
+
+            # 步骤2：获取该料号涉及的所有仓库
+            sales_with_new = self.sales_df[self.sales_df['DZ'] == new_code]
+            warehouses = sales_with_new['GJ'].dropna().unique()
+
+            for warehouse in warehouses:
+                # 步骤2：筛选销售出库单中该仓库的所有记录
+                sales_warehouse = self.sales_df[self.sales_df['GJ'] == warehouse]
+
+                # 步骤3：在即时库存表中筛选相同仓库
+                stock_warehouse = self.stock_df[self.stock_df['G'] == warehouse]
+
+                # 步骤4：筛选物料编码等于新料号的销售记录
+                sales_idx = sales_warehouse[sales_warehouse['DZ'] == new_code].index
+                if len(sales_idx) == 0:
+                    continue
+
+                # 步骤5：筛选物料编码等于新料号的库存记录
+                stock_subset = stock_warehouse[stock_warehouse['A'] == new_code]
+
                 if stock_subset.empty:
                     self._update_progress(
                         f"警告: 库存表中没有找到仓库 {warehouse} 的料号 {new_code}")
@@ -337,7 +355,10 @@ class StockSyncProcessor:
                 aux_e = stock_row['E']
                 aux_f = stock_row['F']
 
+
                 sales_idx = sales_rows.index
+
+
 
                 # 步骤7-10：更新销售出库单相应字段
                 self.sales_df.loc[sales_idx, 'FF'] = batch
@@ -413,6 +434,7 @@ class StockSyncProcessor:
         """处理仓库中的具体物料"""
         material_code = self._normalize_material_code(material_code)
 
+
         # 从即时库存表中获取该物料在该仓库的库存信息（跳过标题行和空行）
         stock_rows = []
         
@@ -456,9 +478,10 @@ class StockSyncProcessor:
         # 更新辅助属性
         self._update_auxiliary_attributes(sales_rows, stock_rows, material_code, warehouse)
     
-    def _allocate_batch_numbers(self, sales_row_indices: list, stock_row_indices: list, 
+    def _allocate_batch_numbers(self, sales_row_indices: list, stock_row_indices: list,
                                material_code: str, warehouse: str):
         """分配批次号"""
+
         # 按行数计算需要分配的数量
         total_sales_qty = len(sales_row_indices)
         if total_sales_qty <= 0:
@@ -614,6 +637,7 @@ class StockSyncProcessor:
         """获取指定物料在指定仓库的批次信息"""
         if self.stock_df is None:
             return []
+
 
         code = self._normalize_material_code(material_code)
         batch_info = self.stock_df[
