@@ -303,6 +303,26 @@ class StockSyncProcessor:
         n = 1
 
         for old_code, new_code in mappings:
+
+            self._update_progress(
+                f"处理料号 {n}/{total}: {old_code} -> {new_code}")
+
+            # 步骤2：获取涉及的仓库
+            warehouses = self.sales_df[self.sales_df['DZ'] == new_code]['GJ'].dropna().unique()
+
+            for warehouse in warehouses:
+                # 步骤2：筛选该仓库的销售记录
+                sales_rows = self.sales_df[(self.sales_df['DZ'] == new_code) &
+                                           (self.sales_df['GJ'] == warehouse)]
+                if sales_rows.empty:
+                    continue
+
+                # 步骤3：在库存表中筛选相同仓库
+                stock_rows = self.stock_df[self.stock_df['G'] == warehouse]
+
+                # 步骤5：筛选库存表中物料编码等于新料号的记录
+                stock_subset = stock_rows[stock_rows['A'] == new_code]
+
             self._update_progress(f"处理料号 {n}/{total}: {old_code} -> {new_code}")
 
             # 步骤2：获取该料号涉及的所有仓库
@@ -323,6 +343,7 @@ class StockSyncProcessor:
 
                 # 步骤5：筛选物料编码等于新料号的库存记录
                 stock_subset = stock_warehouse[stock_warehouse['A'] == new_code]
+
                 if stock_subset.empty:
                     self._update_progress(
                         f"警告: 库存表中没有找到仓库 {warehouse} 的料号 {new_code}")
@@ -333,6 +354,11 @@ class StockSyncProcessor:
                 batch = stock_row['H']
                 aux_e = stock_row['E']
                 aux_f = stock_row['F']
+
+
+                sales_idx = sales_rows.index
+
+
 
                 # 步骤7-10：更新销售出库单相应字段
                 self.sales_df.loc[sales_idx, 'FF'] = batch
