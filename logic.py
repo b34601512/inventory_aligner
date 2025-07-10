@@ -294,7 +294,8 @@ class StockSyncProcessor:
                 continue
 
             indices = self.sales_df[
-                self.sales_df['DZ'].apply(self._normalize_material_code) == old_norm
+                (self.sales_df['DZ'].apply(self._normalize_material_code) == old_norm)
+                & (self.sales_df.index >= 2)
             ].index
 
             if len(indices) == 0:
@@ -320,6 +321,12 @@ class StockSyncProcessor:
         n = 1
         processed_codes = set()
 
+        # 收集销售出库单中出现的仓库顺序列表（跳过前两行）
+        warehouse_list = []
+        for w in self.sales_df['GJ'].iloc[2:]:
+            if pd.notna(w) and w not in warehouse_list:
+                warehouse_list.append(w)
+
         for old_code, new_code in mappings:
             new_norm = self._normalize_material_code(new_code)
 
@@ -331,16 +338,15 @@ class StockSyncProcessor:
             self._update_progress(
                 f"处理料号 {n}/{total}: {old_code} -> {new_code}")
 
-            sales_with_new = self.sales_df[self.sales_df['DZ'] == new_norm]
-            warehouses = sales_with_new['GJ'].dropna().unique()
-
-            for warehouse in warehouses:
-                sales_rows = self.sales_df[(self.sales_df['DZ'] == new_norm) &
+            for warehouse in warehouse_list:
+                sales_rows = self.sales_df[(self.sales_df.index >= 2) &
+                                           (self.sales_df['DZ'] == new_norm) &
                                            (self.sales_df['GJ'] == warehouse)]
                 if sales_rows.empty:
                     continue
 
-                stock_rows = self.stock_df[(self.stock_df['A'] == new_norm) &
+                stock_rows = self.stock_df[(self.stock_df.index >= 1) &
+                                            (self.stock_df['A'] == new_norm) &
                                             (self.stock_df['G'] == warehouse)]
 
                 if stock_rows.empty:
