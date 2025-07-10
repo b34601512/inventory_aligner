@@ -300,31 +300,46 @@ class StockSyncProcessor:
             self._update_progress(f"已替换物料编码: {old_code} -> {new_code}")
 
     def _synchronize_by_flow(self):
-        """按照指定流程同步批次号和辅助属性"""
+        """按照给定流程同步批次号和辅助属性"""
         self._update_progress("正在同步批次和辅助属性...")
 
         mappings = list(self.material_mapping.items())
         total = len(mappings)
         n = 1
+
         for old_code, new_code in mappings:
             self._update_progress(f"处理料号 {n}/{total}: {old_code} -> {new_code}")
-            warehouses = self.sales_df[self.sales_df['DZ'] == new_code]['GJ'].dropna().unique()
+
+            # 步骤2：获取该料号涉及的所有仓库
+            sales_with_new = self.sales_df[self.sales_df['DZ'] == new_code]
+            warehouses = sales_with_new['GJ'].dropna().unique()
 
             for warehouse in warehouses:
-                sales_idx = self.sales_df[(self.sales_df['DZ'] == new_code) & (self.sales_df['GJ'] == warehouse)].index
+                # 步骤2：筛选销售出库单中该仓库的所有记录
+                sales_warehouse = self.sales_df[self.sales_df['GJ'] == warehouse]
+
+                # 步骤3：在即时库存表中筛选相同仓库
+                stock_warehouse = self.stock_df[self.stock_df['G'] == warehouse]
+
+                # 步骤4：筛选物料编码等于新料号的销售记录
+                sales_idx = sales_warehouse[sales_warehouse['DZ'] == new_code].index
                 if len(sales_idx) == 0:
                     continue
 
-                stock_subset = self.stock_df[(self.stock_df['A'] == new_code) & (self.stock_df['G'] == warehouse)]
+                # 步骤5：筛选物料编码等于新料号的库存记录
+                stock_subset = stock_warehouse[stock_warehouse['A'] == new_code]
                 if stock_subset.empty:
-                    self._update_progress(f"警告: 库存表中没有找到仓库 {warehouse} 的料号 {new_code}")
+                    self._update_progress(
+                        f"警告: 库存表中没有找到仓库 {warehouse} 的料号 {new_code}")
                     continue
 
+                # 步骤6：按可用库存降序排序，取最大值行
                 stock_row = stock_subset.sort_values(by='K', ascending=False).iloc[0]
                 batch = stock_row['H']
                 aux_e = stock_row['E']
                 aux_f = stock_row['F']
 
+                # 步骤7-10：更新销售出库单相应字段
                 self.sales_df.loc[sales_idx, 'FF'] = batch
                 self.sales_df.loc[sales_idx, 'FG'] = batch
                 self.sales_df.loc[sales_idx, 'EC'] = aux_e
