@@ -285,11 +285,6 @@ class StockSyncProcessor:
     def _replace_material_codes(self):
         """根据映射表批量替换物料编码"""
         self._update_progress("正在替换物料编码...")
-
-        for old_code, new_code in self.material_mapping.items():
-            mask = self.sales_df['DZ'].apply(self._normalize_material_code) == self._normalize_material_code(old_code)
-            indices = self.sales_df[mask].index
-            if len(indices) == 0:
                 continue
             self.sales_df.loc[indices, 'DZ'] = new_code
             col_idx = 129  # DZ 列实际位置
@@ -398,6 +393,7 @@ class StockSyncProcessor:
         """处理仓库中的具体物料"""
         material_code = self._normalize_material_code(material_code)
 
+
         # 从即时库存表中获取该物料在该仓库的库存信息（跳过标题行和空行）
         stock_rows = []
         
@@ -441,9 +437,10 @@ class StockSyncProcessor:
         # 更新辅助属性
         self._update_auxiliary_attributes(sales_rows, stock_rows, material_code, warehouse)
     
-    def _allocate_batch_numbers(self, sales_row_indices: list, stock_row_indices: list, 
+    def _allocate_batch_numbers(self, sales_row_indices: list, stock_row_indices: list,
                                material_code: str, warehouse: str):
         """分配批次号"""
+
         # 按行数计算需要分配的数量
         total_sales_qty = len(sales_row_indices)
         if total_sales_qty <= 0:
@@ -599,6 +596,7 @@ class StockSyncProcessor:
         """获取指定物料在指定仓库的批次信息"""
         if self.stock_df is None:
             return []
+
 
         code = self._normalize_material_code(material_code)
         batch_info = self.stock_df[
