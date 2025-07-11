@@ -294,7 +294,7 @@ class StockSyncProcessor:
                 continue
 
             indices = self.sales_df[
-                (self.sales_df['DZ'].apply(self._normalize_material_code) == old_norm)
+                (self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
                 & (self.sales_df.index >= 2)
             ].index
 
@@ -339,15 +339,19 @@ class StockSyncProcessor:
                 f"处理料号 {n}/{total}: {old_code} -> {new_code}")
 
             for warehouse in warehouse_list:
-                sales_rows = self.sales_df[(self.sales_df.index >= 2) &
-                                           (self.sales_df['DZ'] == new_norm) &
-                                           (self.sales_df['GJ'] == warehouse)]
+                sales_rows = self.sales_df[
+                    (self.sales_df.index >= 2) &
+                    (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
+                    (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())
+                ]
                 if sales_rows.empty:
                     continue
 
-                stock_rows = self.stock_df[(self.stock_df.index >= 1) &
-                                            (self.stock_df['A'] == new_norm) &
-                                            (self.stock_df['G'] == warehouse)]
+                stock_rows = self.stock_df[
+                    (self.stock_df.index >= 1) &
+                    (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
+                    (self.stock_df['G'].astype(str).str.strip() == str(warehouse).strip())
+                ]
 
                 if stock_rows.empty:
                     self._update_progress(
