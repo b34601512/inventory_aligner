@@ -301,9 +301,12 @@ class StockSyncProcessor:
                 failed_total += 1
                 continue
 
-            # 统计替换前数量
+            # 统计替换前数量以及原本就存在的新料号数量
             before_count = len(
                 self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
+                               & (self.sales_df.index >= 2)])
+            new_before = len(
+                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm)
                                & (self.sales_df.index >= 2)])
 
             indices = self.sales_df[
@@ -333,12 +336,12 @@ class StockSyncProcessor:
             new_total = len(
                 self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm)
                                & (self.sales_df.index >= 2)])
-
-            replaced_count = before_count - old_remaining
+            replaced_count = new_total - new_before
+            
             success_total += replaced_count
             failed_total += old_remaining
             self._update_progress(
-                f"已将 {old_code} 替换为 {new_code}，应替换 {before_count} 行，实际成功 {replaced_count} 行，剩余 {old_remaining} 行，新料号共 {new_total} 行")
+                f"已将 {old_code} 替换为 {new_code}，应替换 {before_count} 行，实际成功 {replaced_count} 行，剩余 {old_remaining} 行，新料号共 {new_total} 行（其中原有 {new_before} 行）")
 
         self._update_progress(
             f"物料编码替换完成，总成功 {success_total} 行，剩余未替换 {failed_total} 行")
