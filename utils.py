@@ -29,7 +29,7 @@ def detect_file_encoding(file_path: str) -> str:
         return 'utf-8'
 
 
-def load_excel_file(file_path: str) -> Tuple[Optional[pd.DataFrame], str]:
+def load_excel_file(file_path: str, dtype: Optional[Any] = None) -> Tuple[Optional[pd.DataFrame], str]:
     """
     加载Excel文件
     
@@ -45,7 +45,17 @@ def load_excel_file(file_path: str) -> Tuple[Optional[pd.DataFrame], str]:
         
         # 尝试读取Excel文件
         if file_path.endswith('.xlsx') or file_path.endswith('.xls'):
-            df = pd.read_excel(file_path, engine='openpyxl' if file_path.endswith('.xlsx') else 'xlrd')
+            if dtype is not None:
+                df = pd.read_excel(
+                    file_path,
+                    engine='openpyxl' if file_path.endswith('.xlsx') else 'xlrd',
+                    dtype=dtype
+                )
+            else:
+                df = pd.read_excel(
+                    file_path,
+                    engine='openpyxl' if file_path.endswith('.xlsx') else 'xlrd'
+                )
         else:
             return None, "不支持的文件格式，请使用Excel文件"
             

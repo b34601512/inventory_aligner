@@ -46,7 +46,7 @@ class StockSyncProcessor:
         """
         try:
             self._update_progress("正在加载销售出库单...")
-            df, error = load_excel_file(file_path)
+            df, error = load_excel_file(file_path, dtype=str)
             
             if error:
                 return error
@@ -227,10 +227,12 @@ class StockSyncProcessor:
             self._update_progress(f"保存映射配置失败: {e}")
 
     def _normalize_material_code(self, code: str) -> str:
-        """规范化物料编码，去除空白字符"""
-        if code is None:
+        """
+        仅清理物料编码中的空格和不可见字符，不移除小数点，也不转换为数字
+        """
+        if pd.isna(code):
             return ""
-        return re.sub(r"\s+", "", str(code)).strip()
+        return str(code).strip().replace("\u200b", "").replace("\xa0", "")
 
     def _validate_material_code(self, code: str) -> bool:
         """验证物料编码格式"""
@@ -301,18 +303,17 @@ class StockSyncProcessor:
                 failed_total += 1
                 continue
 
-            # 统计替换前数量以及原本就存在的新料号数量
-            before_count = len(
-                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
-                               & (self.sales_df.index >= 2)])
-            new_before = len(
-                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm)
-                               & (self.sales_df.index >= 2)])
+            mask = (
+                self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm
+            ) & (self.sales_df.index >= 2)
+            new_before_mask = (
+                self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm
+            ) & (self.sales_df.index >= 2)
 
-            indices = self.sales_df[
-                (self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
-                & (self.sales_df.index >= 2)
-            ].index
+            before_count = int(mask.sum())
+            new_before = int(new_before_mask.sum())
+
+            indices = self.sales_df.index[mask]
 
             if len(indices) == 0:
                 msg = f"未找到需要替换的物料编码 {old_code}"
@@ -330,18 +331,24 @@ class StockSyncProcessor:
             for i in indices:
                 self.modified_cells.append((i, col_idx))
 
-            old_remaining = len(
-                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
-                               & (self.sales_df.index >= 2)])
-            new_total = len(
-                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm)
-                               & (self.sales_df.index >= 2)])
-            replaced_count = new_total - new_before
-            
+            old_remaining = int(
+                (
+                    self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm
+                )
+                & (self.sales_df.index >= 2)
+            ).sum()
+            after_count = int(
+                (
+                    self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm
+                )
+                & (self.sales_df.index >= 2)
+            ).sum()
+            replaced_count = after_count - new_before
+
             success_total += replaced_count
             failed_total += old_remaining
             self._update_progress(
-                f"已将 {old_code} 替换为 {new_code}，应替换 {before_count} 行，实际成功 {replaced_count} 行，剩余 {old_remaining} 行，新料号共 {new_total} 行（其中原有 {new_before} 行）")
+                f"已将 {old_code} 替换为 {new_code}，应替换 {before_count} 行，实际成功 {replaced_count} 行，剩余 {old_remaining} 行，新料号共 {after_count} 行（其中原有 {new_before} 行）")
 
         self._update_progress(
             f"物料编码替换完成，总成功 {success_total} 行，剩余未替换 {failed_total} 行")
@@ -387,8 +394,8 @@ class StockSyncProcessor:
                     continue
 
                 stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
-                aux_e = stock_row['E']
-                aux_f = stock_row['F']
+                aux_e = '' if pd.isna(stock_row['E']) else str(stock_row['E'])
+                aux_f = '' if pd.isna(stock_row['F']) else str(stock_row['F'])
 
                 indices = sales_rows.index
                 self.sales_df.loc[indices, 'EC'] = aux_e
@@ -436,7 +443,7 @@ class StockSyncProcessor:
                     continue
 
                 stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
-                batch = stock_row['H']
+                batch = '' if pd.isna(stock_row['H']) else str(stock_row['H'])
                 self._update_progress(
                     f"取K列最大值所在行批号 {batch}")
 
