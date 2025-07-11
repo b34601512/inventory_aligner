@@ -291,6 +291,9 @@ class StockSyncProcessor:
 
         success_total = 0
         failed_total = 0
+        
+        # 记录失败原因，便于排查
+        fail_reasons = []
 
         for old_code, new_code in self.material_mapping.items():
             old_norm = self._normalize_material_code(old_code)
@@ -308,8 +311,9 @@ class StockSyncProcessor:
             ].index
 
             if len(indices) == 0:
-                self._update_progress(
-                    f"未找到需要替换的物料编码 {old_code}")
+                msg = f"未找到需要替换的物料编码 {old_code}"
+                self._update_progress(msg)
+                fail_reasons.append(msg)
                 failed_total += 1
                 continue
 
@@ -328,6 +332,10 @@ class StockSyncProcessor:
 
         self._update_progress(
             f"物料编码替换完成，成功 {success_total} 行，失败 {failed_total} 行")
+
+        if fail_reasons:
+            for reason in fail_reasons:
+                self._update_progress(f"失败原因: {reason}")
 
     def _sync_auxiliary_attributes(self):
         """同步销售出库单与即时库存表中的辅助属性"""
@@ -348,7 +356,11 @@ class StockSyncProcessor:
                     (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
                     (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())
                 ]
+                self._update_progress(
+                    f"销售出库表筛选结果 {len(sales_rows)} 行")
                 if sales_rows.empty:
+                    self._update_progress(
+                        f"销售出库表未找到记录，跳过 {new_norm} {warehouse}")
                     continue
 
                 self._update_progress(
@@ -358,6 +370,9 @@ class StockSyncProcessor:
                     (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
                     (self.stock_df['G'].astype(str).str.strip() == str(warehouse).strip())
                 ]
+
+                self._update_progress(
+                    f"即时库存表筛选结果 {len(stock_rows)} 行")
 
                 if stock_rows.empty:
                     self._update_progress(
@@ -407,6 +422,9 @@ class StockSyncProcessor:
                     (self.stock_df['G'].astype(str).str.strip() == str(warehouse).strip())
                 ]
 
+                self._update_progress(
+                    f"即时库存表筛选结果 {len(stock_rows)} 行")
+
                 if stock_rows.empty:
                     self._update_progress(
                         f"未找到库存记录，跳过 {new_norm} {warehouse}")
@@ -422,6 +440,9 @@ class StockSyncProcessor:
                     (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
                     (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())
                 ]
+
+                self._update_progress(
+                    f"销售出库表筛选结果 {len(sales_rows)} 行")
 
                 if sales_rows.empty:
                     continue
@@ -730,7 +751,11 @@ class StockSyncProcessor:
     def _save_with_highlights(self):
         """保存文件并高亮修改内容"""
         self._update_progress("正在保存文件...")
-        
+
+        # 先创建备份
+        backup_path = create_backup_file(self.sales_file_path)
+        self._update_progress(f"已创建备份: {backup_path}")
+
         # 直接使用openpyxl打开原始文件
         wb = load_workbook(self.sales_file_path)
         ws = wb.active
@@ -752,8 +777,15 @@ class StockSyncProcessor:
                 
         # 保存文件
         wb.save(self.sales_file_path)
-        
+
         self._update_progress("文件保存完成")
+
+        # 简单验证保存结果
+        try:
+            load_workbook(self.sales_file_path)
+            self._update_progress("文件验证成功")
+        except Exception as e:
+            self._update_progress(f"文件验证失败: {e}")
     
     
     
