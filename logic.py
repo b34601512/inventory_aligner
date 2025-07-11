@@ -267,16 +267,10 @@ class StockSyncProcessor:
             # 开始处理
             self._update_progress("开始处理数据同步...")
             
-            # 1. 替换物料编码
+            # 1. 仅执行物料编码替换，其他动作暂时注释以便排查问题
             self._replace_material_codes()
 
-            # 2. 同步辅助属性
-            self._sync_auxiliary_attributes()
-
-            # 3. 同步批次号
-            self._sync_batch_numbers()
-            
-            # 3. 保存文件并高亮修改内容
+            # 保存文件并高亮修改内容
             self._save_with_highlights()
             
             self._update_progress("数据同步完成！")
@@ -333,16 +327,21 @@ class StockSyncProcessor:
             for i in indices:
                 self.modified_cells.append((i, col_idx))
 
-            after_count = len(
+            old_remaining = len(
+                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
+                               & (self.sales_df.index >= 2)])
+            new_total = len(
                 self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm)
                                & (self.sales_df.index >= 2)])
 
-            success_total += len(indices)
+            replaced_count = before_count - old_remaining
+            success_total += replaced_count
+            failed_total += old_remaining
             self._update_progress(
-                f"已将 {old_code} 替换为 {new_code}，共 {len(indices)} 行，替换前 {before_count} 行，替换后 {after_count} 行")
+                f"已将 {old_code} 替换为 {new_code}，应替换 {before_count} 行，实际成功 {replaced_count} 行，剩余 {old_remaining} 行，新料号共 {new_total} 行")
 
         self._update_progress(
-            f"物料编码替换完成，成功 {success_total} 行，失败 {failed_total} 行")
+            f"物料编码替换完成，总成功 {success_total} 行，剩余未替换 {failed_total} 行")
 
         if fail_reasons:
             for reason in fail_reasons:
@@ -783,8 +782,8 @@ class StockSyncProcessor:
 
         self._update_progress("文件保存完成")
 
-        # 提醒用户当前版本可能存在保存相关问题
-        self._update_progress("执行保存动作，当前可能存在BUG，没保存")
+        # 记录保存动作
+        self._update_progress("执行保存动作")
 
         # 简单验证保存结果
         try:
