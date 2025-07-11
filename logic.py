@@ -291,11 +291,13 @@ class StockSyncProcessor:
 
         success_total = 0
         failed_total = 0
-        
+
         # 记录失败原因，便于排查
         fail_reasons = []
 
         for old_code, new_code in self.material_mapping.items():
+            self._update_progress(
+                f"现在开始使用字符串替换旧料号 {old_code} 成新料号 {new_code}")
             old_norm = self._normalize_material_code(old_code)
             new_norm = self._normalize_material_code(new_code)
 
@@ -304,6 +306,11 @@ class StockSyncProcessor:
                     f"跳过 {old_code} -> {new_code}: 新旧料号相同或为空")
                 failed_total += 1
                 continue
+
+            # 统计替换前数量
+            before_count = len(
+                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
+                               & (self.sales_df.index >= 2)])
 
             indices = self.sales_df[
                 (self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == old_norm)
@@ -326,9 +333,13 @@ class StockSyncProcessor:
             for i in indices:
                 self.modified_cells.append((i, col_idx))
 
+            after_count = len(
+                self.sales_df[(self.sales_df['DZ'].astype(str).apply(self._normalize_material_code) == new_norm)
+                               & (self.sales_df.index >= 2)])
+
             success_total += len(indices)
             self._update_progress(
-                f"已将 {old_code} 替换为 {new_code}，共 {len(indices)} 行")
+                f"已将 {old_code} 替换为 {new_code}，共 {len(indices)} 行，替换前 {before_count} 行，替换后 {after_count} 行")
 
         self._update_progress(
             f"物料编码替换完成，成功 {success_total} 行，失败 {failed_total} 行")
@@ -339,7 +350,7 @@ class StockSyncProcessor:
 
     def _sync_auxiliary_attributes(self):
         """同步销售出库单与即时库存表中的辅助属性"""
-        self._update_progress("开始同步辅助属性...")
+        self._update_progress("现在开始操作销售出库表中辅助属性...")
 
         warehouse_list = []
         for w in self.sales_df['GJ'].iloc[2:]:
@@ -349,22 +360,17 @@ class StockSyncProcessor:
         for old_code, new_code in self.material_mapping.items():
             new_norm = self._normalize_material_code(new_code)
             for idx, warehouse in enumerate(warehouse_list, start=1):
-                self._update_progress(
-                    f"销售出库表: 筛选料号{new_norm}, 仓库{warehouse}")
                 sales_rows = self.sales_df[
                     (self.sales_df.index >= 2) &
                     (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
                     (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())
                 ]
                 self._update_progress(
-                    f"销售出库表筛选结果 {len(sales_rows)} 行")
+                    f"现在筛选出物料号 {new_norm}，仓库 {warehouse}，找到 {len(sales_rows)} 行")
                 if sales_rows.empty:
-                    self._update_progress(
-                        f"销售出库表未找到记录，跳过 {new_norm} {warehouse}")
+                    self._update_progress(f"销售出库表未找到记录，跳过 {new_norm} {warehouse}")
                     continue
 
-                self._update_progress(
-                    f"即时库存表: 筛选料号{new_norm}, 仓库{warehouse}")
                 stock_rows = self.stock_df[
                     (self.stock_df.index >= 1) &
                     (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
@@ -375,8 +381,7 @@ class StockSyncProcessor:
                     f"即时库存表筛选结果 {len(stock_rows)} 行")
 
                 if stock_rows.empty:
-                    self._update_progress(
-                        f"未找到库存记录，跳过 {new_norm} {warehouse}")
+                    self._update_progress(f"未找到库存记录，跳过 {new_norm} {warehouse}")
                     continue
 
                 stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
@@ -400,11 +405,11 @@ class StockSyncProcessor:
                     ])
 
                 self._update_progress(
-                    f"已更新辅助属性 {new_norm} {warehouse} 共 {len(indices)} 行")
+                    f"现在对销售出库表进行操作: EC列修改 {len(indices)} 行, ED列修改 {len(indices)} 行")
 
     def _sync_batch_numbers(self):
         """同步销售出库单中的批次号"""
-        self._update_progress("开始同步批次号...")
+        self._update_progress("现在开始修改销售出库表中批次号...")
 
         warehouse_list = []
         for w in self.sales_df['GJ'].iloc[2:]:
@@ -414,8 +419,6 @@ class StockSyncProcessor:
         for old_code, new_code in self.material_mapping.items():
             new_norm = self._normalize_material_code(new_code)
             for idx, warehouse in enumerate(warehouse_list, start=1):
-                self._update_progress(
-                    f"筛选即时库存表 {new_norm} {warehouse}")
                 stock_rows = self.stock_df[
                     (self.stock_df.index >= 1) &
                     (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
@@ -423,7 +426,7 @@ class StockSyncProcessor:
                 ]
 
                 self._update_progress(
-                    f"即时库存表筛选结果 {len(stock_rows)} 行")
+                    f"现在筛选即时库存表中 {new_norm}+{warehouse}，找到 {len(stock_rows)} 行")
 
                 if stock_rows.empty:
                     self._update_progress(
@@ -433,7 +436,7 @@ class StockSyncProcessor:
                 stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
                 batch = stock_row['H']
                 self._update_progress(
-                    f"提取批号 {batch}")
+                    f"取K列最大值所在行批号 {batch}")
 
                 sales_rows = self.sales_df[
                     (self.sales_df.index >= 2) &
@@ -442,7 +445,7 @@ class StockSyncProcessor:
                 ]
 
                 self._update_progress(
-                    f"销售出库表筛选结果 {len(sales_rows)} 行")
+                    f"现在筛选销售出库表中 {new_norm}+{warehouse}，找到 {len(sales_rows)} 行")
 
                 if sales_rows.empty:
                     continue
@@ -464,7 +467,7 @@ class StockSyncProcessor:
                     ])
 
                 self._update_progress(
-                    f"已更新批次号 {new_norm} {warehouse} 共 {len(indices)} 行")
+                    f"现在修改销售出库表筛选结果中的批次号，已修改 {len(indices)} 行，批次号等于 {batch}")
 
     def _synchronize_by_flow(self):
         """按照给定流程同步批次号和辅助属性"""
@@ -779,6 +782,9 @@ class StockSyncProcessor:
         wb.save(self.sales_file_path)
 
         self._update_progress("文件保存完成")
+
+        # 提醒用户当前版本可能存在保存相关问题
+        self._update_progress("执行保存动作，当前可能存在BUG，没保存")
 
         # 简单验证保存结果
         try:
