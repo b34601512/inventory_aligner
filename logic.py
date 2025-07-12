@@ -250,6 +250,9 @@ class StockSyncProcessor:
         
         return True
     
+    def _log_section(self, title):
+        self._update_progress("\n" + "="*20 + f" {title} " + "="*20 + "\n")
+
     def process_synchronization(self) -> str:
         """
         执行同步处理
@@ -265,13 +268,27 @@ class StockSyncProcessor:
                 return "请先加载即时库存表"
             
             if not self.material_mapping:
-                return "请先设置物料编码映射"
+                # 如果没有映射，只执行后续步骤可能无意义，但暂不强制要求
+                self._update_progress("警告：未设置物料编码映射，将跳过料号替换步骤。")
+
+            # 清空上次的修改记录
+            self.modified_cells = []
             
             # 开始处理
             self._update_progress("开始处理数据同步...")
             
-            # 1. 仅执行物料编码替换，其他动作暂时注释以便排查问题
-            self._replace_material_codes()
+            # 1. 替换物料编码
+            self._log_section("物料编码替换")
+            if self.material_mapping:
+                self._replace_material_codes()
+            
+            # 2. 同步辅助属性
+            self._log_section("辅助属性同步")
+            self._sync_auxiliary_attributes()
+
+            # 3. 批号同步（如有需要）
+            self._log_section("批号同步")
+            self._sync_batch_numbers()
 
             # 保存文件并高亮修改内容
             self._save_with_highlights()
@@ -365,125 +382,164 @@ class StockSyncProcessor:
 
 
     def _sync_auxiliary_attributes(self):
-        """同步销售出库单与即时库存表中的辅助属性"""
-        self._update_progress("现在开始操作销售出库表中辅助属性...")
+        """
+        只同步那些已经替换成新料号的行的辅助属性，且用新料号+仓库查库存表。
+        日志详细说明每一步。
+        """
+        self._update_progress("开始同步辅助属性（仅处理新料号行）...")
 
-        warehouse_list = []
-        for w in self.sales_df['GJ'].iloc[2:]:
-            if pd.notna(w) and w not in warehouse_list:
-                warehouse_list.append(w)
+        # 构建库存表查找字典（新料号+仓库）
+        stock_aux_map = {}
+        temp_stock_df = self.stock_df.iloc[1:].copy()
+        temp_stock_df['K_num'] = pd.to_numeric(temp_stock_df['K'], errors='coerce').fillna(0)
+        for _, row in temp_stock_df.iterrows():
+            material_code = self._normalize_material_code(row['A'])
+            warehouse = str(row['G']).strip()
+            if material_code and warehouse:
+                current_stock_qty = row['K_num']
+                if (material_code, warehouse) not in stock_aux_map or current_stock_qty > stock_aux_map.get((material_code, warehouse), {}).get('K', -1):
+                    stock_aux_map[(material_code, warehouse)] = {
+                        'E': '' if pd.isna(row['E']) else str(row['E']),
+                        'F': '' if pd.isna(row['F']) else str(row['F']),
+                        'K': current_stock_qty
+                    }
 
-        for old_code, new_code in self.material_mapping.items():
+        ec_col_idx = 132
+        ed_col_idx = 133
+
+        # 保证顺序与映射表一致
+        for new_code in list(dict.fromkeys(self.material_mapping.values())):
             new_norm = self._normalize_material_code(new_code)
-            for idx, warehouse in enumerate(warehouse_list, start=1):
-                sales_rows = self.sales_df[
-                    (self.sales_df.index >= 2) &
+            # 先筛选出所有新料号的行
+            sales_df_new = self.sales_df.iloc[1:][self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm]
+            warehouse_list = sales_df_new['GJ'].dropna().astype(str).str.strip().unique()
+            self._update_progress(f"新料号 {new_norm} 共涉及 {len(warehouse_list)} 个仓库: {list(warehouse_list)}")
+            for warehouse_str in warehouse_list:
+                mask = (
                     (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
-                    (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())
-                ]
-                self._update_progress(
-                    f"现在筛选出物料号 {new_norm}，仓库 {warehouse}，找到 {len(sales_rows)} 行")
-                if sales_rows.empty:
-                    self._update_progress(f"销售出库表未找到记录，跳过 {new_norm} {warehouse}")
+                    (self.sales_df['GJ'].astype(str).str.strip() == warehouse_str) &
+                    (self.sales_df.index >= 1)
+                )
+                indices = self.sales_df.index[mask]
+                if len(indices) == 0:
                     continue
 
-                stock_rows = self.stock_df[
-                    (self.stock_df.index >= 1) &
-                    (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
-                    (self.stock_df['G'].astype(str).str.strip() == str(warehouse).strip())
-                ]
+                self._update_progress(f"处理新料号: '{new_norm}' + 仓库: '{warehouse_str}'，共 {len(indices)} 行。")
 
-                self._update_progress(
-                    f"即时库存表筛选结果 {len(stock_rows)} 行")
+                # 销售出库表原本的EC/ED属性
+                old_ec_vals = self.sales_df.loc[indices, 'EC'].unique()
+                old_ed_vals = self.sales_df.loc[indices, 'ED'].unique()
+                self._update_progress(f"  -> 销售出库表原本EC属性: {list(old_ec_vals)}，ED属性: {list(old_ed_vals)}")
 
-                if stock_rows.empty:
-                    self._update_progress(f"未找到库存记录，跳过 {new_norm} {warehouse}")
-                    continue
+                # 即时库存表中该料号+仓库的辅助属性
+                match = stock_aux_map.get((new_norm, warehouse_str))
+                if match:
+                    aux_e = match['E']
+                    aux_f = match['F']
+                    self._update_progress(f"  -> 即时库存表中该料号+仓库的E列属性: '{aux_e}'，F属性: '{aux_f}'")
+                    self._update_progress(f"  -> 将销售出库表中{len(indices)}行的EC属性从{list(old_ec_vals)}改为'{aux_e}'，ED属性从{list(old_ed_vals)}改为'{aux_f}'")
+                    self.sales_df.loc[indices, 'EC'] = aux_e
+                    if ec_col_idx < len(self.sales_df.columns):
+                        for idx in indices:
+                            self.sales_df.iat[idx, ec_col_idx] = aux_e
+                            if (idx, ec_col_idx) not in self.modified_cells:
+                                self.modified_cells.append((idx, ec_col_idx))
+                    self.sales_df.loc[indices, 'ED'] = aux_f
+                    if ed_col_idx < len(self.sales_df.columns):
+                        for idx in indices:
+                            self.sales_df.iat[idx, ed_col_idx] = aux_f
+                            if (idx, ed_col_idx) not in self.modified_cells:
+                                self.modified_cells.append((idx, ed_col_idx))
+                else:
+                    self._update_progress(f"  -> 警告: 在库存表中未找到新料号 '{new_norm}' 在仓库 '{warehouse_str}' 的记录，跳过此组合的辅助属性同步。")
 
-                stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
-                aux_e = '' if pd.isna(stock_row['E']) else str(stock_row['E'])
-                aux_f = '' if pd.isna(stock_row['F']) else str(stock_row['F'])
+        self._update_progress("辅助属性同步完成。")
 
-                indices = sales_rows.index
-                self.sales_df.loc[indices, 'EC'] = aux_e
-                self.sales_df.loc[indices, 'ED'] = aux_f
-
-                ec_idx, ed_idx = 132, 133
-                if ec_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[indices, ec_idx] = aux_e
-                if ed_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[indices, ed_idx] = aux_f
-
-                for i in indices:
-                    self.modified_cells.extend([
-                        (i, ec_idx),
-                        (i, ed_idx)
-                    ])
-
-                self._update_progress(
-                    f"现在对销售出库表进行操作: EC列修改 {len(indices)} 行, ED列修改 {len(indices)} 行")
 
     def _sync_batch_numbers(self):
-        """同步销售出库单中的批次号"""
-        self._update_progress("现在开始修改销售出库表中批次号...")
+        """
+        同步销售出库单中的批次号，按库存分配，详细日志说明每一步。
+        """
+        self._update_progress("开始同步批号（仅处理新料号行，按库存分配）...")
 
-        warehouse_list = []
-        for w in self.sales_df['GJ'].iloc[2:]:
-            if pd.notna(w) and w not in warehouse_list:
-                warehouse_list.append(w)
+        temp_stock_df = self.stock_df.iloc[1:].copy()
+        temp_stock_df['K_num'] = pd.to_numeric(temp_stock_df['K'], errors='coerce').fillna(0)
 
-        for old_code, new_code in self.material_mapping.items():
+        ff_col_idx = 161
+        fg_col_idx = 162
+
+        for new_code in list(dict.fromkeys(self.material_mapping.values())):
             new_norm = self._normalize_material_code(new_code)
-            for idx, warehouse in enumerate(warehouse_list, start=1):
-                stock_rows = self.stock_df[
-                    (self.stock_df.index >= 1) &
-                    (self.stock_df['A'].apply(self._normalize_material_code) == new_norm) &
-                    (self.stock_df['G'].astype(str).str.strip() == str(warehouse).strip())
-                ]
-
-                self._update_progress(
-                    f"现在筛选即时库存表中 {new_norm}+{warehouse}，找到 {len(stock_rows)} 行")
-
-                if stock_rows.empty:
-                    self._update_progress(
-                        f"未找到库存记录，跳过 {new_norm} {warehouse}")
-                    continue
-
-                stock_row = stock_rows.sort_values(by='K', ascending=False).iloc[0]
-                batch = '' if pd.isna(stock_row['H']) else str(stock_row['H'])
-                self._update_progress(
-                    f"取K列最大值所在行批号 {batch}")
-
-                sales_rows = self.sales_df[
-                    (self.sales_df.index >= 2) &
+            sales_df_new = self.sales_df.iloc[1:][self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm]
+            warehouse_list = sales_df_new['GJ'].dropna().astype(str).str.strip().unique()
+            self._update_progress(f"新料号 {new_norm} 共涉及 {len(warehouse_list)} 个仓库: {list(warehouse_list)}")
+            for warehouse_str in warehouse_list:
+                mask = (
                     (self.sales_df['DZ'].apply(self._normalize_material_code) == new_norm) &
-                    (self.sales_df['GJ'].astype(str).str.strip() == str(warehouse).strip())
-                ]
-
-                self._update_progress(
-                    f"现在筛选销售出库表中 {new_norm}+{warehouse}，找到 {len(sales_rows)} 行")
-
-                if sales_rows.empty:
+                    (self.sales_df['GJ'].astype(str).str.strip() == warehouse_str) &
+                    (self.sales_df.index >= 1)
+                )
+                indices = self.sales_df.index[mask]
+                if len(indices) == 0:
                     continue
 
-                indices = sales_rows.index
-                self.sales_df.loc[indices, 'FF'] = batch
-                self.sales_df.loc[indices, 'FG'] = batch
+                self._update_progress(f"处理新料号: '{new_norm}' + 仓库: '{warehouse_str}'，共 {len(indices)} 行。")
 
-                ff_idx, fg_idx = 161, 162
-                if ff_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[indices, ff_idx] = batch
-                if fg_idx < len(self.sales_df.columns):
-                    self.sales_df.iloc[indices, fg_idx] = batch
+                # 销售出库表原本的批号FF/FG属性
+                old_ff_vals = self.sales_df.loc[indices, 'FF'].unique()
+                old_fg_vals = self.sales_df.loc[indices, 'FG'].unique()
+                self._update_progress(f"  -> 销售出库表原本FF(批号主档)属性: {list(old_ff_vals)}，FG(批号手工)属性: {list(old_fg_vals)}")
 
-                for i in indices:
-                    self.modified_cells.extend([
-                        (i, ff_idx),
-                        (i, fg_idx)
-                    ])
+                # 1. 获取即时库存表中该料号+仓库下所有批号及可用库存
+                stock_rows = temp_stock_df[
+                    (temp_stock_df['A'].apply(self._normalize_material_code) == new_norm) &
+                    (temp_stock_df['G'].astype(str).str.strip() == warehouse_str)
+                ]
+                if stock_rows.empty:
+                    self._update_progress(f"  -> 警告: 在库存表中未找到新料号 '{new_norm}' 在仓库 '{warehouse_str}' 的记录，跳过此组合的批号同步。")
+                    continue
 
-                self._update_progress(
-                    f"现在修改销售出库表筛选结果中的批次号，已修改 {len(indices)} 行，批次号等于 {batch}")
+                # 按库存量K从大到小排序
+                stock_rows = stock_rows.sort_values(by='K_num', ascending=False)
+                batch_info = []
+                for _, row in stock_rows.iterrows():
+                    batch = '' if pd.isna(row['H']) else str(row['H'])
+                    qty = int(row['K_num'])
+                    batch_info.append({'batch': batch, 'qty': qty})
+                batch_info_str = ', '.join([f"{b['batch']}({b['qty']})" for b in batch_info])
+                self._update_progress(f"  -> 即时库存表批号分布: [{batch_info_str}]")
+
+                # 2. 分配批号
+                sales_indices = list(indices)
+                allocated = 0
+                for b in batch_info:
+                    if not sales_indices:
+                        break
+                    assign_count = min(b['qty'], len(sales_indices))
+                    if assign_count == 0:
+                        continue
+                    self._update_progress(f"    -> 批号 '{b['batch']}' 可用库存 {b['qty']}，分配 {assign_count} 行。")
+                    for i in range(assign_count):
+                        idx = sales_indices.pop(0)
+                        self.sales_df.at[idx, 'FF'] = b['batch']
+                        self.sales_df.at[idx, 'FG'] = b['batch']
+                        if ff_col_idx < len(self.sales_df.columns) and fg_col_idx < len(self.sales_df.columns):
+                            self.sales_df.iat[idx, ff_col_idx] = b['batch']
+                            self.sales_df.iat[idx, fg_col_idx] = b['batch']
+                            if (idx, ff_col_idx) not in self.modified_cells:
+                                self.modified_cells.append((idx, ff_col_idx))
+                            if (idx, fg_col_idx) not in self.modified_cells:
+                                self.modified_cells.append((idx, fg_col_idx))
+                        allocated += 1
+                if sales_indices:
+                    self._update_progress(f"  -> 警告: 库存不足，尚有 {len(sales_indices)} 行未能分配批号！")
+                else:
+                    # 分配完成后，输出FF、FG列的新值
+                    new_ff_vals = self.sales_df.loc[indices, 'FF'].unique()
+                    new_fg_vals = self.sales_df.loc[indices, 'FG'].unique()
+                    self._update_progress(f"  -> 批号分配完成，共分配 {allocated} 行。销售出库表FF列新值: {list(new_ff_vals)}，FG列新值: {list(new_fg_vals)}")
+
+        self._update_progress("批号同步完成。")
 
     def _synchronize_by_flow(self):
         """按照给定流程同步批次号和辅助属性"""
